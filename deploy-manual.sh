@@ -17,14 +17,13 @@ NC='\033[0m'
 
 # Step 1: Update system
 echo -e "${YELLOW}1️⃣  Updating system packages...${NC}"
-sudo apt update
-sudo apt upgrade -y
+sudo yum update -y
 
-# Step 2: Install Node.js 18
-echo -e "${YELLOW}2️⃣  Installing Node.js 18...${NC}"
+# Step 2: Install Node.js (latest LTS)
+echo -e "${YELLOW}2️⃣  Installing Node.js (latest LTS)...${NC}"
 if ! command -v node &> /dev/null; then
-    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-    sudo apt install -y nodejs
+    curl -fsSL https://rpm.nodesource.com/setup_lts.x | sudo bash -
+    sudo yum install -y nodejs
     echo -e "${GREEN}✓ Node.js installed: $(node --version)${NC}"
 else
     echo -e "${GREEN}✓ Node.js already installed: $(node --version)${NC}"
@@ -79,7 +78,9 @@ cd ../
 
 # Step 7: Install Nginx
 echo -e "${YELLOW}8️⃣  Installing and configuring Nginx...${NC}"
-sudo apt install -y nginx
+sudo yum install -y nginx
+sudo systemctl enable nginx
+sudo systemctl start nginx
 
 sudo tee /etc/nginx/sites-available/default > /dev/null << 'EOF'
 server {
@@ -103,6 +104,7 @@ server {
 EOF
 
 sudo nginx -t
+sudo systemctl enable nginx
 sudo systemctl restart nginx
 
 # Step 8: Verify
