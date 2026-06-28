@@ -1,4 +1,4 @@
-name: Deploy to AWS
+name: Deploy to AWS EC2
 
 on:
   push:
@@ -8,9 +8,10 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-      - name: Deploy via SSH
+      - name: Setup SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.AWS_SSH_KEY }}
           SSH_HOST: ${{ secrets.AWS_INSTANCE_IP }}
@@ -21,13 +22,63 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
 
+      - name: Deploy Application
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.AWS_SSH_KEY }}
+          SSH_HOST: ${{ secrets.AWS_INSTANCE_IP }}
+          SSH_USER: ${{ secrets.AWS_SSH_USER }}
+          DEPLOY_PATH: /home/ubuntu/email-verifier
+        run: |
           ssh -i ~/.ssh/id_rsa $SSH_USER@$SSH_HOST << 'DEPLOY_SCRIPT'
-          cd /home/$USER/email-verifier
-          git pull origin main || git pull origin master
+          set -e
+
+          echo "🚀 Starting deployment..."
+
+          # Navigate to project directory
+          if [ ! -d "$DEPLOY_PATH" ]; then
+            echo "📁 Cloning repository..."
+            git clone https://github.com/$GITHUB_REPOSITORY.git "$DEPLOY_PATH"
+          fi
+
+          cd "$DEPLOY_PATH"
+
+          # Pull latest code
+          echo "📥 Pulling latest code..."
+          git fetch origin
+          git checkout ${GITHUB_REF#refs/heads/}
+          git reset --hard origin/${GITHUB_REF#refs/heads/}
+
+          # Install and build backend
+          echo "⚙️  Installing backend dependencies..."
+          cd backend
+          npm install --production
+          cd ../
+
+          # Build frontend
+          echo "🎨 Building frontend..."
           cd frontend
           npm install
           npm run build
           cd ../
-          pm2 restart email-verifier
+
+          # Restart application with PM2
+          echo "🔄 Restarting application..."
+          pm2 restart email-verifier || pm2 start "npm run start" --name "email-verifier" --cwd "$DEPLOY_PATH/backend"
           pm2 save
+
+          # Health check
+          sleep 3
+          if curl -s http://localhost:5000/health > /dev/null; then
+            echo "✅ Health check passed"
+          else
+            echo "⚠️  Health check failed - check PM2 logs"
+            pm2 logs --lines 50
+            exit 1
+          fi
+
+          echo "✨ Deployment completed successfully!"
           DEPLOY_SCRIPT
+
+      - name: Deployment Status
+        if: failure()
+        run: echo "❌ Deployment failed. Check logs above."
