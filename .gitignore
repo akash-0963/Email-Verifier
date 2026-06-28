@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+*.log
+dist/
+build/
+.DS_Store
+uploads/
+downloads/
+*.csv
+.vscode/settings.json
