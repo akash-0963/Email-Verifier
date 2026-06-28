@@ -5,7 +5,6 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { errorHandler } from './middleware/errorHandler.js';
 import verifyRoutes from './routes/verify.js';
-import { initializeGmail } from './services/gmailVerifier.js';
 
 dotenv.config();
 
@@ -15,11 +14,6 @@ const __dirname = dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Initialize Gmail if configured
-initializeGmail({
-  email: process.env.GMAIL_USER,
-  appPassword: process.env.GMAIL_APP_PASSWORD
-});
 
 // Middleware
 app.use(cors());

@@ -7,6 +7,7 @@ import csv from 'csv-parser';
 import { format } from 'fast-csv';
 import { verifyEmail, verifyBatch } from '../services/emailVerifier.js';
 import { ensureUploadDirs, generateFilename, cleanupFile } from '../utils/fileUtils.js';
+import { getBounceStats, getBounceRecord, getAllBounceRecords, clearBounceRecords } from '../services/bounceHandler.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -136,6 +137,41 @@ router.post('/verify-csv', upload.single('file'), async (req, res, next) => {
     await cleanupFile(uploadedFilePath);
     next(error);
   }
+});
+
+// Get bounce statistics
+router.get('/bounce-stats', (req, res) => {
+  const stats = getBounceStats();
+  res.json(stats);
+});
+
+// Get specific bounce record by email
+router.get('/bounce-record/:email', (req, res) => {
+  const email = decodeURIComponent(req.params.email);
+  const data = getBounceData(email);
+  if (!data) {
+    return res.status(404).json({
+      email,
+      status: 'pending',
+      message: 'No bounce/delivery record yet. Check back later.'
+    });
+  }
+  res.json(data);
+});
+
+// Get specific tracking data
+router.get('/bounce-data/:trackingId', (req, res) => {
+  const data = getBounceData(req.params.trackingId);
+  if (!data) {
+    return res.status(404).json({ error: 'Tracking ID not found' });
+  }
+  res.json(data);
+});
+
+// Clear bounce data
+router.post('/bounce-clear', (req, res) => {
+  clearBounceRecords();
+  res.json({ message: 'Bounce tracking data cleared' });
 });
 
 export default router;

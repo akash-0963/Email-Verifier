@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { initializeBounceTracker, trackBounce } from './bounceTracker.js';
 
 let transporter = null;
 let isConfigured = false;
@@ -20,6 +21,7 @@ export function initializeGmail(config) {
     });
 
     isConfigured = true;
+    initializeBounceTracker(config);
     console.log(`✅ Gmail initialized for delivery verification (${config.email})`);
     return true;
   } catch (error) {
@@ -33,7 +35,7 @@ export function isGmailConfigured() {
   return isConfigured;
 }
 
-// Send test email and track delivery
+// Send test email and track delivery with bounce detection
 export async function verifyByDelivery(email, testId) {
   if (!isConfigured) {
     return { verified: null, reason: 'Gmail not configured' };
@@ -48,34 +50,36 @@ export async function verifyByDelivery(email, testId) {
       subject: 'Email Verification Test',
       text: `This is an automated verification email. Tracking ID: ${uniqueId}`,
       html: `<p>Automated verification email</p><p>Tracking ID: ${uniqueId}</p>`,
-      dkim: {
-        domainName: process.env.GMAIL_USER.split('@')[1],
-        keySelector: 'default',
-        privatKey: ''
+      headers: {
+        'X-Tracking-ID': uniqueId,
+        'X-Verification-Email': 'true'
       }
     };
 
-    // Only test sending if not a catch-all test
-    if (!testId.includes('catchall')) {
-      const info = await transporter.sendMail(mailOptions);
-      console.log(`  📧 Test email sent to ${email}`);
-      console.log(`  → Message ID: ${info.messageId}`);
+    // Send with bounce tracking
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`  📧 Test email sent to ${email}`);
+    console.log(`  → Message ID: ${info.messageId}`);
+    console.log(`  → Tracking ID: ${uniqueId}`);
 
+    // Use bounce tracker
+    const bounceResult = await trackBounce(email, testId);
+
+    if (bounceResult.bounced === true) {
+      console.log(`  ⚠️  Hard bounce detected: ${bounceResult.reason}`);
       return {
-        verified: true,
-        messageId: info.messageId,
-        reason: 'Email accepted by Gmail SMTP',
-        trackingId: uniqueId,
-        note: 'Email was successfully sent; mailbox likely exists'
+        verified: false,
+        reason: bounceResult.reason,
+        bounced: true
       };
     }
 
-    // For catch-all detection, just accept (will be validated separately)
     return {
       verified: true,
-      messageId: 'catchall-test',
-      reason: 'Accepted for catch-all validation',
-      trackingId: uniqueId
+      messageId: info.messageId,
+      reason: 'Email accepted by Gmail SMTP',
+      trackingId: uniqueId,
+      note: 'Email was successfully sent; mailbox likely exists'
     };
   } catch (error) {
     // Gmail SMTP errors indicate invalid email or blocked address
@@ -86,7 +90,8 @@ export async function verifyByDelivery(email, testId) {
       console.log(`  ❌ Gmail SMTP rejected: ${error.message}`);
       return {
         verified: false,
-        reason: error.message
+        reason: error.message,
+        bounced: true
       };
     }
 

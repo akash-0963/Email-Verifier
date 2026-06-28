@@ -12,7 +12,8 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@aws-sdk/client-ses": "^3.1075.0",
+    "@aws-sdk/client-ses": "^3.500.0",
+    "@aws-sdk/client-sns": "^3.500.0",
     "cors": "^2.8.5",
     "csv-parser": "^3.0.0",
     "dotenv": "^16.3.1",

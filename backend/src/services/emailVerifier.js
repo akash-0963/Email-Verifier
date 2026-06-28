@@ -1,7 +1,6 @@
 import dns from 'dns';
 import { promisify } from 'util';
 import net from 'net';
-import { isGmailConfigured, verifyByDelivery } from './gmailVerifier.js';
 
 const resolveMx = promisify(dns.resolveMx);
 
@@ -24,47 +23,99 @@ function isDisposableDomain(domain) {
 // Sophisticated format validation for major providers
 function validateProviderFormat(localPart, domain) {
   const providerRules = {
-    'gmail.com': { minLen: 6, maxLen: 30, pattern: /^[a-z0-9._-]+$/, checkPattern: false },
-    'yahoo.com': { minLen: 4, maxLen: 32, pattern: /^[a-z0-9._-]+$/, checkPattern: false },
-    'hotmail.com': { minLen: 3, maxLen: 64, pattern: /^[a-z0-9._-]+$/, checkPattern: false },
-    'outlook.com': { minLen: 3, maxLen: 64, pattern: /^[a-z0-9._-]+$/, checkPattern: false },
-    'icloud.com': { minLen: 3, maxLen: 32, pattern: /^[a-z0-9._-]+$/, checkPattern: false },
-    'protonmail.com': { minLen: 2, maxLen: 40, pattern: /^[a-z0-9._-]+$/, checkPattern: false },
-    'aol.com': { minLen: 3, maxLen: 32, pattern: /^[a-z0-9._-]+$/, checkPattern: false }
+    'gmail.com': { minLen: 6, maxLen: 30, pattern: /^[a-z0-9._-]+$/ },
+    'yahoo.com': { minLen: 5, maxLen: 32, pattern: /^[a-z0-9._-]+$/ },
+    'hotmail.com': { minLen: 6, maxLen: 64, pattern: /^[a-z0-9._-]+$/ },
+    'outlook.com': { minLen: 6, maxLen: 64, pattern: /^[a-z0-9._-]+$/ },
+    'icloud.com': { minLen: 5, maxLen: 32, pattern: /^[a-z0-9._-]+$/ },
+    'protonmail.com': { minLen: 5, maxLen: 40, pattern: /^[a-z0-9._-]+$/ },
+    'aol.com': { minLen: 5, maxLen: 32, pattern: /^[a-z0-9._-]+$/ }
   };
 
   const rules = providerRules[domain.toLowerCase()];
   if (!rules) return null;
 
   const len = localPart.length;
+
+  // Strict length validation
   if (len < rules.minLen || len > rules.maxLen) {
-    console.log(`  → Local part length ${len} outside provider range [${rules.minLen}-${rules.maxLen}]`);
+    console.log(`  → Length ${len} outside strict range [${rules.minLen}-${rules.maxLen}]`);
     return false;
   }
 
+  // Pattern validation
   if (!rules.pattern.test(localPart)) {
-    console.log(`  → Local part contains invalid characters for ${domain}`);
+    console.log(`  → Invalid characters for ${domain}`);
     return false;
   }
 
-  // Check for obvious fake patterns (be lenient for real emails)
-  const excessiveNumbers = (localPart.match(/\d/g) || []).length > len * 0.8;
-  if (excessiveNumbers && len < 20) {
-    console.log(`  → Too many numbers (${(localPart.match(/\d/g) || []).length}/${len})`);
+  // Reject consecutive numbers at start (common spam pattern)
+  if (/^\d{3,}/.test(localPart)) {
+    console.log(`  → Starts with 3+ consecutive numbers`);
     return false;
   }
 
-  // Only reject extremely long repetitive sequences (30+ same char)
-  const extremeSequences = /(\d{30,}|[a-z]{30,})/i.test(localPart);
-  if (extremeSequences) {
-    console.log(`  → Contains extreme sequential patterns`);
+  // Reject mostly numbers
+  const numberCount = (localPart.match(/\d/g) || []).length;
+  if (numberCount > len * 0.6) {
+    console.log(`  → Too many numbers (${numberCount}/${len} = ${Math.round(numberCount/len*100)}%)`);
     return false;
   }
 
-  const tooManyDots = (localPart.match(/\./g) || []).length > 3;
-  if (tooManyDots) {
-    console.log(`  → Too many dots in local part`);
+  // Reject extremely long repetitive sequences (25+ letters or 15+ numbers)
+  if (/\d{15,}/.test(localPart)) {
+    console.log(`  → Too many consecutive numbers`);
     return false;
+  }
+
+  if (/[a-z]{25,}/i.test(localPart)) {
+    console.log(`  → Too many consecutive letters`);
+    return false;
+  }
+
+  // Reject consecutive dots
+  if (/\.\./.test(localPart)) {
+    console.log(`  → Contains consecutive dots`);
+    return false;
+  }
+
+  // Reject starting/ending with dot or dash
+  if (/^[._-]|[._-]$/.test(localPart)) {
+    console.log(`  → Starts or ends with special character`);
+    return false;
+  }
+
+  // Reject too many dots (max 2)
+  const dotCount = (localPart.match(/\./g) || []).length;
+  if (dotCount > 2) {
+    console.log(`  → Too many dots (${dotCount})`);
+    return false;
+  }
+
+  // Reject too many dashes (max 1)
+  const dashCount = (localPart.match(/-/g) || []).length;
+  if (dashCount > 1) {
+    console.log(`  → Too many dashes (${dashCount})`);
+    return false;
+  }
+
+  // Reject common spam patterns
+  const spamPatterns = [
+    /test/i,
+    /temp/i,
+    /fake/i,
+    /spam/i,
+    /admin/i,
+    /noreply/i,
+    /nospam/i,
+    /no.?reply/i
+  ];
+
+  for (const pattern of spamPatterns) {
+    if (pattern.test(localPart)) {
+      console.log(`  → Contains spam/test keyword`);
+      return false;
+    }
   }
 
   return true;
@@ -286,95 +337,25 @@ export async function verifyEmail(email) {
   const majorProviders = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'protonmail.com', 'aol.com'];
 
   if (majorProviders.includes(domain)) {
-    console.log(`  Checking ${domain} format heuristics...`);
+    console.log(`  Checking ${domain} format...`);
     const formatValid = validateProviderFormat(localPart, domain);
 
-    // If Gmail is configured, verify by sending test email (even if format fails)
-    if (isGmailConfigured()) {
-      console.log(`  Testing delivery via Gmail SMTP...`);
-      const deliveryResult = await verifyByDelivery(emailLower, emailLower.replace('@', '-'));
-
-      if (deliveryResult.verified === true) {
-        console.log(`  ✅ Email accepted by Gmail (valid despite format check)`);
-        return {
-          email: emailLower,
-          status: 'valid',
-          checks: {
-            syntax: true,
-            mxRecords: true,
-            smtp: true,
-            disposable: false,
-            isMajorProvider: true,
-            deliveryVerified: true,
-            messageId: deliveryResult.messageId,
-            formatValid: formatValid
-          }
-        };
-      } else if (deliveryResult.verified === false) {
-        console.log(`  ❌ Email rejected by Gmail SMTP (invalid)`);
-        return {
-          email: emailLower,
-          status: 'invalid',
-          reason: deliveryResult.reason,
-          checks: {
-            syntax: true,
-            mxRecords: true,
-            smtp: false,
-            disposable: false,
-            deliveryVerified: false,
-            formatValid: formatValid
-          }
-        };
-      } else {
-        console.log(`  ⚠️  Delivery verification inconclusive`);
-        if (formatValid === false) {
-          console.log(`  → Format validation failed, marking as invalid`);
-          return {
-            email: emailLower,
-            status: 'invalid',
-            reason: 'Format validation failed',
-            checks: { syntax: true, mxRecords: true, smtp: null, disposable: false, formatValid: false }
-          };
-        } else {
-          console.log(`  → Assuming valid based on format`);
-          return {
-            email: emailLower,
-            status: 'valid',
-            checks: {
-              syntax: true,
-              mxRecords: true,
-              smtp: true,
-              disposable: false,
-              isMajorProvider: true,
-              deliveryVerified: null,
-              formatValid: true
-            }
-          };
-        }
-      }
-    } else {
-      // No Gmail configured, rely on format validation alone
-      if (formatValid === false) {
-        console.log(`  ❌ Format validation failed (Gmail not configured)`);
-        return {
-          email: emailLower,
-          status: 'invalid',
-          reason: 'Format validation failed',
-          checks: { syntax: true, mxRecords: true, smtp: false, disposable: false, formatValid: false }
-        };
-      } else {
-        console.log(`  ✅ Format validation passed`);
-        return {
-          email: emailLower,
-          status: 'valid',
-          checks: { syntax: true, mxRecords: true, smtp: true, disposable: false, isMajorProvider: true, formatValid: true }
-        };
-      }
+    if (formatValid === false) {
+      console.log(`  ❌ Format validation failed for ${domain}`);
+      return {
+        email: emailLower,
+        status: 'invalid',
+        reason: 'Format validation failed',
+        checks: { syntax: true, mxRecords: true, smtp: false, disposable: false, isMajorProvider: true }
+      };
     }
+
+    console.log(`  ✅ Format validation passed, performing SMTP check...`);
+    // Continue to SMTP verification below
   }
 
-  // SMTP verification for custom/corporate domains (NOT Gmail)
-  console.log(`  Performing SMTP handshake on port 25 for domain: ${domain}...`);
+  // SMTP verification for custom/corporate domains
+  console.log(`  Performing SMTP verification for domain: ${domain}...`);
   const smtpResult = await checkSMTP(mxHost, emailLower, domain);
 
   let status = 'valid';
@@ -392,38 +373,9 @@ export async function verifyEmail(email) {
       reason = 'catch-all domain';
     }
   } else {
-    // SMTP timeout/unavailable - try Gmail delivery verification if configured
-    console.log(`  ⚠️ SMTP: Could not verify (port 25 blocked?)`);
-
-    if (isGmailConfigured()) {
-      console.log(`  Attempting fallback via Gmail delivery...`);
-      const deliveryResult = await verifyByDelivery(emailLower, 'fallback');
-
-      if (deliveryResult.verified === false) {
-        console.log(`  ❌ Gmail SMTP rejected: ${deliveryResult.reason}`);
-        status = 'invalid';
-        reason = deliveryResult.reason;
-      } else {
-        // Test if it's a catch-all by sending to non-existent address
-        console.log(`  Testing for catch-all...`);
-        const fakeEmail = `nonexistent${Date.now()}@${domain}`;
-        const fakeResult = await verifyByDelivery(fakeEmail, 'catchall-test');
-
-        if (fakeResult.verified === true) {
-          console.log(`  🔄 Catch-all detected (fake email also accepted)`);
-          status = 'catch-all';
-          reason = 'domain accepts all emails (catch-all)';
-        } else {
-          console.log(`  ✅ Email appears valid (fake email rejected)`);
-          status = 'valid';
-          reason = 'verified via Gmail delivery';
-        }
-      }
-    } else {
-      console.log(`  ⚠️ Port 25 blocked and Gmail not configured - assuming valid`);
-      status = 'valid';
-      reason = 'verification inconclusive (port 25 blocked)';
-    }
+    console.log(`  ⚠️ SMTP: Could not verify (port 25 blocked or timeout)`);
+    status = 'unknown';
+    reason = 'SMTP verification unavailable';
   }
 
   return {
