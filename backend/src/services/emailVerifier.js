@@ -289,24 +289,13 @@ export async function verifyEmail(email) {
     console.log(`  Checking ${domain} format heuristics...`);
     const formatValid = validateProviderFormat(localPart, domain);
 
-    if (formatValid === false) {
-      console.log(`  ❌ Format validation failed for ${domain}`);
-      return {
-        email: emailLower,
-        status: 'invalid',
-        checks: { syntax: true, mxRecords: true, smtp: false, disposable: false }
-      };
-    }
-
-    console.log(`  ✅ Format validation passed`);
-
-    // If Gmail is configured, verify by sending test email
+    // If Gmail is configured, verify by sending test email (even if format fails)
     if (isGmailConfigured()) {
       console.log(`  Testing delivery via Gmail SMTP...`);
       const deliveryResult = await verifyByDelivery(emailLower, emailLower.replace('@', '-'));
 
       if (deliveryResult.verified === true) {
-        console.log(`  ✅ Email accepted by Gmail (likely valid)`);
+        console.log(`  ✅ Email accepted by Gmail (valid despite format check)`);
         return {
           email: emailLower,
           status: 'valid',
@@ -317,7 +306,8 @@ export async function verifyEmail(email) {
             disposable: false,
             isMajorProvider: true,
             deliveryVerified: true,
-            messageId: deliveryResult.messageId
+            messageId: deliveryResult.messageId,
+            formatValid: formatValid
           }
         };
       } else if (deliveryResult.verified === false) {
@@ -331,32 +321,55 @@ export async function verifyEmail(email) {
             mxRecords: true,
             smtp: false,
             disposable: false,
-            deliveryVerified: false
+            deliveryVerified: false,
+            formatValid: formatValid
           }
         };
       } else {
-        console.log(`  ⚠️  Delivery verification inconclusive, assuming valid based on format`);
-        return {
-          email: emailLower,
-          status: 'valid',
-          checks: {
-            syntax: true,
-            mxRecords: true,
-            smtp: true,
-            disposable: false,
-            isMajorProvider: true,
-            deliveryVerified: null
-          }
-        };
+        console.log(`  ⚠️  Delivery verification inconclusive`);
+        if (formatValid === false) {
+          console.log(`  → Format validation failed, marking as invalid`);
+          return {
+            email: emailLower,
+            status: 'invalid',
+            reason: 'Format validation failed',
+            checks: { syntax: true, mxRecords: true, smtp: null, disposable: false, formatValid: false }
+          };
+        } else {
+          console.log(`  → Assuming valid based on format`);
+          return {
+            email: emailLower,
+            status: 'valid',
+            checks: {
+              syntax: true,
+              mxRecords: true,
+              smtp: true,
+              disposable: false,
+              isMajorProvider: true,
+              deliveryVerified: null,
+              formatValid: true
+            }
+          };
+        }
       }
     } else {
       // No Gmail configured, rely on format validation alone
-      console.log(`  ✅ Format validation passed (Gmail not configured)`);
-      return {
-        email: emailLower,
-        status: 'valid',
-        checks: { syntax: true, mxRecords: true, smtp: true, disposable: false, isMajorProvider: true }
-      };
+      if (formatValid === false) {
+        console.log(`  ❌ Format validation failed (Gmail not configured)`);
+        return {
+          email: emailLower,
+          status: 'invalid',
+          reason: 'Format validation failed',
+          checks: { syntax: true, mxRecords: true, smtp: false, disposable: false, formatValid: false }
+        };
+      } else {
+        console.log(`  ✅ Format validation passed`);
+        return {
+          email: emailLower,
+          status: 'valid',
+          checks: { syntax: true, mxRecords: true, smtp: true, disposable: false, isMajorProvider: true, formatValid: true }
+        };
+      }
     }
   }
 
