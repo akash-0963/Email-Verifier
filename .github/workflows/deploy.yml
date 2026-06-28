@@ -1,0 +1,33 @@
+name: Deploy to AWS
+
+on:
+  push:
+    branches: [main, master]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Deploy via SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.AWS_SSH_KEY }}
+          SSH_HOST: ${{ secrets.AWS_INSTANCE_IP }}
+          SSH_USER: ${{ secrets.AWS_SSH_USER }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
+
+          ssh -i ~/.ssh/id_rsa $SSH_USER@$SSH_HOST << 'DEPLOY_SCRIPT'
+          cd /home/$USER/email-verifier
+          git pull origin main || git pull origin master
+          cd frontend
+          npm install
+          npm run build
+          cd ../
+          pm2 restart email-verifier
+          pm2 save
+          DEPLOY_SCRIPT
