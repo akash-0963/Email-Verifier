@@ -47,20 +47,21 @@ function validateProviderFormat(localPart, domain) {
     return false;
   }
 
-  // Check for obvious fake patterns
-  const excessiveNumbers = (localPart.match(/\d/g) || []).length > len * 0.7;
-  if (excessiveNumbers) {
+  // Check for obvious fake patterns (be lenient for real emails)
+  const excessiveNumbers = (localPart.match(/\d/g) || []).length > len * 0.8;
+  if (excessiveNumbers && len < 20) {
     console.log(`  → Too many numbers (${(localPart.match(/\d/g) || []).length}/${len})`);
     return false;
   }
 
-  const longSequences = /(\d{5,}|[a-z]{12,})/i.test(localPart);
-  if (longSequences) {
-    console.log(`  → Contains long sequential patterns`);
+  // Only reject extremely long repetitive sequences (30+ same char)
+  const extremeSequences = /(\d{30,}|[a-z]{30,})/i.test(localPart);
+  if (extremeSequences) {
+    console.log(`  → Contains extreme sequential patterns`);
     return false;
   }
 
-  const tooManyDots = (localPart.match(/\./g) || []).length > 2;
+  const tooManyDots = (localPart.match(/\./g) || []).length > 3;
   if (tooManyDots) {
     console.log(`  → Too many dots in local part`);
     return false;
@@ -93,7 +94,7 @@ export async function checkMXRecords(domain) {
 }
 
 // Verify email via SMTP conversation with catch-all detection
-export async function checkSMTP(mxHost, email, domain, timeout = 10000) {
+export async function checkSMTP(mxHost, email, domain, timeout = 15000) {
   if (!mxHost) return { exists: null, isCatchAll: false };
 
   return new Promise((resolve) => {
@@ -104,6 +105,7 @@ export async function checkSMTP(mxHost, email, domain, timeout = 10000) {
     let isCatchAll = false;
     let nonExistentTested = false;
 
+    // Try port 25 first, with longer timeout for AWS
     const socket = net.createConnection({ host: mxHost, port: 25, timeout });
 
     const send = (data) => {
@@ -358,8 +360,8 @@ export async function verifyEmail(email) {
     }
   }
 
-  // SMTP verification for custom/corporate domains
-  console.log(`  Performing SMTP handshake on port 25...`);
+  // SMTP verification for custom/corporate domains (NOT Gmail)
+  console.log(`  Performing SMTP handshake on port 25 for domain: ${domain}...`);
   const smtpResult = await checkSMTP(mxHost, emailLower, domain);
 
   let status = 'valid';
@@ -377,9 +379,38 @@ export async function verifyEmail(email) {
       reason = 'catch-all domain';
     }
   } else {
-    console.log(`  ⚠️ SMTP: Could not verify (assuming valid)`);
-    status = 'valid';
-    reason = 'verification inconclusive';
+    // SMTP timeout/unavailable - try Gmail delivery verification if configured
+    console.log(`  ⚠️ SMTP: Could not verify (port 25 blocked?)`);
+
+    if (isGmailConfigured()) {
+      console.log(`  Attempting fallback via Gmail delivery...`);
+      const deliveryResult = await verifyByDelivery(emailLower, 'fallback');
+
+      if (deliveryResult.verified === false) {
+        console.log(`  ❌ Gmail SMTP rejected: ${deliveryResult.reason}`);
+        status = 'invalid';
+        reason = deliveryResult.reason;
+      } else {
+        // Test if it's a catch-all by sending to non-existent address
+        console.log(`  Testing for catch-all...`);
+        const fakeEmail = `nonexistent${Date.now()}@${domain}`;
+        const fakeResult = await verifyByDelivery(fakeEmail, 'catchall-test');
+
+        if (fakeResult.verified === true) {
+          console.log(`  🔄 Catch-all detected (fake email also accepted)`);
+          status = 'catch-all';
+          reason = 'domain accepts all emails (catch-all)';
+        } else {
+          console.log(`  ✅ Email appears valid (fake email rejected)`);
+          status = 'valid';
+          reason = 'verified via Gmail delivery';
+        }
+      }
+    } else {
+      console.log(`  ⚠️ Port 25 blocked and Gmail not configured - assuming valid`);
+      status = 'valid';
+      reason = 'verification inconclusive (port 25 blocked)';
+    }
   }
 
   return {
