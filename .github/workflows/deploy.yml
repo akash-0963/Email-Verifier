@@ -1,0 +1,86 @@
+name: Deploy to AWS EC2
+
+on:
+  push:
+    branches: [main, master]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.AWS_SSH_KEY }}
+          SSH_HOST: ${{ secrets.AWS_INSTANCE_IP }}
+          SSH_USER: ${{ secrets.AWS_SSH_USER }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
+
+      - name: Deploy Application
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.AWS_SSH_KEY }}
+          SSH_HOST: ${{ secrets.AWS_INSTANCE_IP }}
+          SSH_USER: ${{ secrets.AWS_SSH_USER }}
+        run: |
+          ssh -i ~/.ssh/id_rsa $SSH_USER@$SSH_HOST << 'DEPLOY_SCRIPT'
+          set -e
+
+          echo "🚀 Starting deployment..."
+          cd ~/email-verifier
+
+          # Pull latest code
+          echo "📥 Pulling latest code..."
+          git pull origin main || git pull origin master
+
+          # Build frontend
+          echo "🎨 Building frontend..."
+          cd frontend
+          npm install
+          npm run build
+          cd ../
+
+          # Install backend
+          echo "⚙️  Installing backend..."
+          cd backend
+          rm -rf node_modules package-lock.json
+          npm install
+          cd ../
+
+          # Restart services with PM2
+          echo "🛑 Stopping existing services..."
+          pm2 delete email-verifier-backend email-verifier-frontend 2>/dev/null || true
+
+          echo "🔧 Starting backend on port 5000..."
+          pm2 start "npm run start" --name "email-verifier-backend" --cwd ~/email-verifier/backend
+
+          echo "🌐 Starting frontend on port 5173..."
+          pm2 start "npm start" --name "email-verifier-frontend" --cwd ~/email-verifier/frontend
+
+          # Save PM2 process list
+          pm2 save
+
+          echo ""
+          echo "✅ Deployment completed!"
+          pm2 status
+
+          # Health check
+          sleep 2
+          if curl -s http://localhost:5000/health > /dev/null; then
+            echo "✅ Backend health check passed"
+          else
+            echo "⚠️ Backend health check failed"
+            pm2 logs email-verifier-backend --lines 20
+            exit 1
+          fi
+
+          DEPLOY_SCRIPT
+
+      - name: Deployment Status
+        if: failure()
+        run: echo "❌ Deployment failed. Check logs above."
