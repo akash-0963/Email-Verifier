@@ -1,6 +1,7 @@
 import dns from 'dns';
 import { promisify } from 'util';
 import net from 'net';
+import { isGmailConfigured, verifyByDelivery } from './gmailVerifier.js';
 
 const resolveMx = promisify(dns.resolveMx);
 
@@ -277,8 +278,8 @@ export async function verifyEmail(email) {
 
   console.log(`  ✓ MX records found`);
 
-  // STAGE 3: Provider-specific format validation & SMTP verification
-  console.log(`  Stage 3: Provider Validation & SMTP Handshake`);
+  // STAGE 3: Provider-specific format validation & delivery verification
+  console.log(`  Stage 3: Provider Validation & Delivery Verification`);
 
   const majorProviders = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'protonmail.com', 'aol.com'];
 
@@ -296,11 +297,65 @@ export async function verifyEmail(email) {
     }
 
     console.log(`  ✅ Format validation passed`);
-    return {
-      email: emailLower,
-      status: 'valid',
-      checks: { syntax: true, mxRecords: true, smtp: true, disposable: false, isMajorProvider: true }
-    };
+
+    // If Gmail is configured, verify by sending test email
+    if (isGmailConfigured()) {
+      console.log(`  Testing delivery via Gmail SMTP...`);
+      const deliveryResult = await verifyByDelivery(emailLower, emailLower.replace('@', '-'));
+
+      if (deliveryResult.verified === true) {
+        console.log(`  ✅ Email accepted by Gmail (likely valid)`);
+        return {
+          email: emailLower,
+          status: 'valid',
+          checks: {
+            syntax: true,
+            mxRecords: true,
+            smtp: true,
+            disposable: false,
+            isMajorProvider: true,
+            deliveryVerified: true,
+            messageId: deliveryResult.messageId
+          }
+        };
+      } else if (deliveryResult.verified === false) {
+        console.log(`  ❌ Email rejected by Gmail SMTP (invalid)`);
+        return {
+          email: emailLower,
+          status: 'invalid',
+          reason: deliveryResult.reason,
+          checks: {
+            syntax: true,
+            mxRecords: true,
+            smtp: false,
+            disposable: false,
+            deliveryVerified: false
+          }
+        };
+      } else {
+        console.log(`  ⚠️  Delivery verification inconclusive, assuming valid based on format`);
+        return {
+          email: emailLower,
+          status: 'valid',
+          checks: {
+            syntax: true,
+            mxRecords: true,
+            smtp: true,
+            disposable: false,
+            isMajorProvider: true,
+            deliveryVerified: null
+          }
+        };
+      }
+    } else {
+      // No Gmail configured, rely on format validation alone
+      console.log(`  ✅ Format validation passed (Gmail not configured)`);
+      return {
+        email: emailLower,
+        status: 'valid',
+        checks: { syntax: true, mxRecords: true, smtp: true, disposable: false, isMajorProvider: true }
+      };
+    }
   }
 
   // SMTP verification for custom/corporate domains
