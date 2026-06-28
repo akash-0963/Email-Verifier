@@ -32,6 +32,13 @@ app.use('/downloads', express.static(join(__dirname, '../downloads')));
 // Routes
 app.use('/api', verifyRoutes);
 
+// Serve frontend (production)
+const frontendPath = join(__dirname, '../../frontend/dist');
+app.use(express.static(frontendPath));
+app.get('*', (req, res) => {
+  res.sendFile(join(frontendPath, 'index.html'));
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
