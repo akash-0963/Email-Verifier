@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { errorHandler } from './middleware/errorHandler.js';
 import verifyRoutes from './routes/verify.js';
+import { initializeSMTP } from './services/smtpVerifier.js';
 
 dotenv.config();
 
@@ -22,6 +23,15 @@ app.use(express.urlencoded({ extended: true }));
 
 // Serve downloaded files
 app.use('/downloads', express.static(join(__dirname, '../downloads')));
+
+// Initialize AWS SES SMTP
+initializeSMTP({
+  host: process.env.MAIL_HOST,
+  port: process.env.MAIL_PORT || 587,
+  secure: process.env.MAIL_SECURE === 'true',
+  user: process.env.MAIL_USER,
+  pass: process.env.MAIL_PASS
+});
 
 // Routes
 app.use('/api', verifyRoutes);
